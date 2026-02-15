@@ -1,6 +1,6 @@
 services:
   schedule-visualiser:
-    build: .
+    image: therealscienta/schedule_visualizer:latest
     ports:
       - "8080:3001"
     volumes:
