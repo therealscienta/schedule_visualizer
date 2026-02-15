@@ -39,6 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_ENV
+
       - name: "Run slugify"
         id: slugify
         uses: eltimn/slugify-action@v2.0.1
@@ -58,9 +61,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ github.repository }}:${{steps.slugify.outputs.branch}}-${{steps.slugify.outputs.sha}} \
-            ${{ github.repository }}:${{steps.slugify.outputs.branch}}-latest \
-            ${{ github.repository }}:$VERSION-dev-${{steps.slugify.outputs.sha}} \
-            ${{ github.repository }}:$VERSION-dev-latest
+            therealscienta/schedule_visualizer:${{steps.slugify.outputs.branch}}-${{steps.slugify.outputs.sha}}
+            therealscienta/schedule_visualizer:${{steps.slugify.outputs.branch}}-latest
+            therealscienta/schedule_visualizer:${{ env.VERSION }}-dev-${{steps.slugify.outputs.sha}}
+            therealscienta/schedule_visualizer:${{ env.VERSION }}-dev-latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
