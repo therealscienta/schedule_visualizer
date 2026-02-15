@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import App from './App';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -16,11 +17,13 @@ vi.mock('./components/CustomDateRangePicker', () => ({
 
 const renderApp = () => {
   return render(
-    <AuthProvider>
+    <MemoryRouter>
       <SettingsProvider>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </SettingsProvider>
-    </AuthProvider>
+    </MemoryRouter>
   );
 };
 
