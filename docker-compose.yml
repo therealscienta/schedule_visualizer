@@ -1,8 +1,9 @@
 services:
   schedule-visualiser:
     image: therealscienta/schedule_visualizer:latest
+    container_name: schedule_visualizer
     ports:
-      - "8080:3001"
+      - "3001:3001"
     volumes:
       - ./data:/app/data
     environment:
