@@ -54,7 +54,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ github.repository }}:dev
-            ${{ github.repository }}:dev-${{ github.sha }}
+            therealscienta/schedule_visualizer:dev
+            therealscienta/schedule_visualizer:dev-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
