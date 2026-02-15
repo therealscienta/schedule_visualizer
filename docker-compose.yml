@@ -1,0 +1,12 @@
+services:
+  schedule-visualiser:
+    build: .
+    ports:
+      - "8080:3001"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
+      - DB_PATH=/app/data/schedules.db
+    restart: unless-stopped
