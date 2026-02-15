@@ -1,6 +1,9 @@
 # ── Stage 1: Builder ─────────────────────────────────────────────────────────
 FROM node:22-alpine AS builder
 
+# Build tools required to compile native addons (better-sqlite3, bcrypt)
+RUN apk add --no-cache python3 make g++
+
 # Frontend deps (layer cached until package files change)
 WORKDIR /app
 COPY package*.json ./
