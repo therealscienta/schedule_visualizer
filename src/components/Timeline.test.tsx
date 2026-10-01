@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Timeline } from './Timeline';
 import { SettingsProvider } from '../contexts/SettingsContext';
-import type { Schedule, TimeRange } from '../types';
+import type { Schedule } from '../types';
 
 // Mock the StatisticsPanel component
 vi.mock('./StatisticsPanel', () => ({
@@ -346,7 +346,7 @@ describe('Timeline', () => {
         },
       ];
 
-      const { container } = renderWithSettings(<Timeline schedules={longLabelSchedule} timeRange="24h" />);
+      renderWithSettings(<Timeline schedules={longLabelSchedule} timeRange="24h" />);
 
       const labelElement = screen.getByText(longLabelSchedule[0].label);
       expect(labelElement).toHaveClass('truncate');

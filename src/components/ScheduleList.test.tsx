@@ -347,4 +347,70 @@ describe('ScheduleList', () => {
       expect(heading).toHaveTextContent('Active Schedules (2)');
     });
   });
+
+  describe('Projects', () => {
+    const projects = [{ id: 'p1', name: 'Project One', color: '#111' }];
+
+    it('should list a schedule whose project is unknown as unassigned', () => {
+      render(
+        <ScheduleList
+          schedules={[
+            { ...mockSchedules[0], projectId: 'p1' },
+            { ...mockSchedules[1], projectId: 'no-longer-shared' },
+          ]}
+          projects={projects}
+          onRemove={mockOnRemove}
+          onRename={mockOnRename}
+        />
+      );
+
+      expect(screen.getByText('Hourly Check')).toBeInTheDocument();
+      expect(screen.getByText('Unassigned')).toBeInTheDocument();
+    });
+  });
+
+  describe('Permissions', () => {
+    const projects = [{ id: 'p1', name: 'Project One', color: '#111' }];
+    const shared: Schedule = { ...mockSchedules[0], projectId: 'p1' };
+
+    it('should not offer rename for schedules the user cannot edit', () => {
+      render(
+        <ScheduleList schedules={[shared]} onRemove={mockOnRemove} onRename={mockOnRename} canEdit={() => false} />
+      );
+
+      expect(screen.queryByTitle('Click to rename')).not.toBeInTheDocument();
+      expect(screen.getByText('Daily Backup')).toBeInTheDocument();
+    });
+
+    it('should not offer remove or move for schedules the user does not own', () => {
+      render(
+        <ScheduleList
+          schedules={[shared]}
+          projects={projects}
+          onRemove={mockOnRemove}
+          onRename={mockOnRename}
+          onAssignProject={vi.fn()}
+          canManage={() => false}
+        />
+      );
+
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+      expect(screen.getByTitle('Only the owner can move this schedule')).toBeDisabled();
+    });
+
+    it('should keep showing the current project when it is not assignable', () => {
+      render(
+        <ScheduleList
+          schedules={[shared]}
+          projects={projects}
+          assignableProjects={[]}
+          onRemove={mockOnRemove}
+          onRename={mockOnRename}
+          onAssignProject={vi.fn()}
+        />
+      );
+
+      expect(screen.getByTitle('Assign to project')).toHaveValue('p1');
+    });
+  });
 });

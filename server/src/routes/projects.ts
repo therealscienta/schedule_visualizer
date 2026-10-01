@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { getDatabase } from '../db/connection';
+import { getDatabase, isUniqueViolation } from '../db/connection';
 import { authMiddleware } from '../middleware/auth';
 import { AuthRequest } from '../types';
 
@@ -121,7 +121,15 @@ router.post('/', (req: AuthRequest, res: Response, next) => {
       INSERT INTO projects (id, owner_id, name, color)
       VALUES (?, ?, ?, ?)
     `);
-    stmt.run(id, req.user!.id, name, color);
+    try {
+      stmt.run(id, req.user!.id, name, color);
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        res.status(409).json({ error: 'A project with this id already exists' });
+        return;
+      }
+      throw err;
+    }
 
     // Fetch and return the created project
     const project = db.prepare(`
@@ -158,6 +166,13 @@ router.put('/:id', (req: AuthRequest, res: Response, next) => {
 
     const db = getDatabase();
 
+    // Unknown ids are a 404 (not a 403) so clients can tell "create it" from "not allowed"
+    const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(id);
+    if (!exists) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
     // Check permissions
     const access = hasProjectAccess(req.user!.id, id, true);
     if (!access.hasAccess) {
@@ -185,7 +200,7 @@ router.put('/:id', (req: AuthRequest, res: Response, next) => {
       return;
     }
 
-    fields.push('updated_at = datetime("now")');
+    fields.push("updated_at = datetime('now')");
     values.push(id);
 
     const stmt = db.prepare(`

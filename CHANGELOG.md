@@ -2,6 +2,32 @@
 
 All notable changes to the Cron Schedule Visualiser project.
 
+## [Unreleased]
+
+### Security
+- `JWT_SECRET` is now required in production: the server refuses to start without it or with a placeholder value, and `docker-compose.yml` no longer defaults it. **Set `JWT_SECRET` (e.g. in `.env`) before deploying this version.**
+- Every API request re-checks the account, so disabling, deleting or demoting a user takes effect immediately instead of when the 7-day token expires.
+- Login and sharing resolve an email before a username, and new usernames can't contain `@`, so a username can no longer shadow someone else's email.
+- `POST /api/schedules/sync` only accepts projects the user can edit; editors can no longer move other people's schedules out of a shared project.
+- Server errors no longer send internal (SQL) messages to the client.
+
+### Fixed
+- Renaming schedules and projects, moving schedules between projects, and all admin role/status changes failed with HTTP 500 (`datetime("now")` in SQL).
+- Signed-in users couldn't save a schedule without a project; it vanished on the next refresh.
+- Project owners couldn't see schedules that editors added to their projects.
+- Signing out left the account's data on screen and in localStorage; a server outage no longer signs users out.
+- Imports while signed in are saved to the server.
+- The UI only offers actions the user's role allows on shared projects and schedules, and reports changes the server rejects.
+- Schedules whose project isn't listed are shown as unassigned instead of disappearing; deleting the filtered project resets the filter.
+- Timeline generation is much faster (cron-parser 5) and capped at 10,000 runs per schedule; 6-field (seconds) expressions are rejected.
+- Custom date ranges no longer shift by the UTC offset, reject empty dates, and are restored after a reload.
+- Zoom widens the timeline and scrolls instead of stretching it; back-to-back runs are no longer reported as overlaps; statistics use local calendar days; a run exactly at the start of the range is included (the range end is exclusive).
+- JSON export includes all schedules, not just the filtered ones; SVG export embeds the page styles.
+- Duplicate ids return 409 instead of 500; `PUT /api/projects/:id` returns 404 for unknown projects.
+
+### Changed
+- Added backend API tests (run by `npm test`), an ESLint config, and enforced the Vitest coverage thresholds (`npm run test:coverage` fails below 80%).
+
 ## [2.0.0] - 2026-02-07
 
 ### Added - Major Feature Release

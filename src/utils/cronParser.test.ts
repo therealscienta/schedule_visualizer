@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { validateCronExpression, generateExecutions, detectOverlaps } from './cronParser';
+import {
+  validateCronExpression,
+  generateExecutions,
+  generateExecutionsWithLimit,
+  detectOverlaps,
+  MAX_EXECUTIONS_PER_SCHEDULE,
+} from './cronParser';
 import type { Schedule, ScheduleExecution } from '../types';
 
 describe('cronParser', () => {
@@ -22,6 +28,24 @@ describe('cronParser', () => {
       expect(validateCronExpression('*/5 * * * *')).toBe(true);
       expect(validateCronExpression('0-30 * * * *')).toBe(true);
       expect(validateCronExpression('0,15,30,45 * * * *')).toBe(true);
+      expect(validateCronExpression('0 0 * * THU')).toBe(true);
+    });
+
+    it('should accept predefined aliases', () => {
+      expect(validateCronExpression('@daily')).toBe(true);
+      expect(validateCronExpression('@hourly')).toBe(true);
+    });
+
+    it('should reject expressions that are not 5 fields', () => {
+      expect(validateCronExpression('* * * * * *')).toBe(false); // every second
+      expect(validateCronExpression('0 0 * * * *')).toBe(false);
+      expect(validateCronExpression('* * *')).toBe(false);
+    });
+
+    it('should reject sub-minute aliases and hashed values', () => {
+      expect(validateCronExpression('@secondly')).toBe(false);
+      expect(validateCronExpression('H * * * *')).toBe(false);
+      expect(validateCronExpression('0 H(0-5) * * *')).toBe(false);
     });
   });
 
@@ -143,6 +167,39 @@ describe('cronParser', () => {
       });
     });
 
+    it('should include a run exactly at the start and exclude one exactly at the end', () => {
+      const daily: Schedule = { id: 'd', label: 'Daily', cronExpression: '0 2 * * *', color: '#000', durationMinutes: 0 };
+      const startDate = new Date(2026, 9, 1, 2, 0); // local 02:00
+      const executions = generateExecutions([daily], startDate, 48);
+
+      expect(executions.map((e) => e.timestamp)).toEqual([
+        new Date(2026, 9, 1, 2, 0),
+        new Date(2026, 9, 2, 2, 0),
+      ]);
+    });
+
+    it('should cap executions per schedule and report the truncated schedules', () => {
+      const frequent: Schedule = { id: 'f', label: 'Frequent', cronExpression: '* * * * *', color: '#000', durationMinutes: 0 };
+      const hourly: Schedule = { id: 'h', label: 'Hourly', cronExpression: '0 * * * *', color: '#000', durationMinutes: 0 };
+
+      const result = generateExecutionsWithLimit([frequent, hourly], new Date('2024-01-01T00:00:00Z'), 24, 100);
+
+      expect(result.executions.filter((e) => e.scheduleId === 'f')).toHaveLength(100);
+      expect(result.executions.filter((e) => e.scheduleId === 'h')).toHaveLength(24);
+      expect(result.truncatedScheduleIds).toEqual(['f']);
+    });
+
+    it('should generate a capped minute-level schedule quickly', () => {
+      const everyMinute: Schedule = { id: 'm', label: 'Every minute', cronExpression: '* * * * *', color: '#000', durationMinutes: 0 };
+      const started = performance.now();
+
+      const result = generateExecutionsWithLimit([everyMinute], new Date('2024-01-01T00:00:00Z'), 30 * 24);
+
+      expect(result.executions).toHaveLength(MAX_EXECUTIONS_PER_SCHEDULE);
+      // cron-parser 4.x needed ~1 ms per minute-level run (over 10 s here)
+      expect(performance.now() - started).toBeLessThan(5000);
+    });
+
     it('should handle multiple schedules with different frequencies', () => {
       const complexSchedules: Schedule[] = [
         { id: '1', label: 'Every 15 min', cronExpression: '*/15 * * * *', color: '#111', durationMinutes: 0 },
@@ -236,10 +293,52 @@ describe('cronParser', () => {
       ];
 
       const overlaps = detectOverlaps(executions);
-      // Adjacent ranges should not overlap (end of first = start of second, but starts come before ends)
-      // Actually they overlap at the boundary point
-      // The sweep line processes starts before ends, so both would be active at time 11:00
-      expect(overlaps.length).toBeLessThanOrEqual(1);
+      // A run ending exactly when the next one starts is back-to-back, not overlapping
+      expect(overlaps).toHaveLength(0);
+    });
+
+    it('should not detect overlap for a point-in-time run when another run ends', () => {
+      const executions: ScheduleExecution[] = [
+        {
+          scheduleId: 'schedule-1',
+          timestamp: new Date('2024-01-01T10:00:00Z'),
+          endTimestamp: new Date('2024-01-01T11:00:00Z'),
+          label: 'Task 1',
+          color: '#111',
+        },
+        {
+          scheduleId: 'schedule-2',
+          timestamp: new Date('2024-01-01T11:00:00Z'),
+          endTimestamp: new Date('2024-01-01T11:00:00Z'),
+          label: 'Task 2',
+          color: '#222',
+        },
+      ];
+
+      expect(detectOverlaps(executions)).toHaveLength(0);
+    });
+
+    it('should detect a point-in-time run at the start of another run', () => {
+      const executions: ScheduleExecution[] = [
+        {
+          scheduleId: 'schedule-1',
+          timestamp: new Date('2024-01-01T10:00:00Z'),
+          endTimestamp: new Date('2024-01-01T10:00:00Z'),
+          label: 'Task 1',
+          color: '#111',
+        },
+        {
+          scheduleId: 'schedule-2',
+          timestamp: new Date('2024-01-01T10:00:00Z'),
+          endTimestamp: new Date('2024-01-01T11:00:00Z'),
+          label: 'Task 2',
+          color: '#222',
+        },
+      ];
+
+      const overlaps = detectOverlaps(executions);
+      expect(overlaps).toHaveLength(1);
+      expect(overlaps[0].count).toBe(2);
     });
 
     it('should detect full containment', () => {

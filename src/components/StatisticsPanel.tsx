@@ -21,6 +21,13 @@ interface DayStat {
   count: number;
 }
 
+const pad = (n: number): string => String(n).padStart(2, '0');
+
+// YYYY-MM-DD of the local calendar day (toISOString would give the UTC day)
+function toLocalDateKey(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 export function StatisticsPanel({ executions, overlaps, startDate, endDate }: StatisticsPanelProps) {
   const { timeFormat } = useSettings();
 
@@ -48,7 +55,7 @@ export function StatisticsPanel({ executions, overlaps, startDate, endDate }: St
     // Calculate executions by day
     const dayCounts = new Map<string, number>();
     for (const exec of executions) {
-      const dateKey = exec.timestamp.toISOString().split('T')[0];
+      const dateKey = toLocalDateKey(exec.timestamp);
       dayCounts.set(dateKey, (dayCounts.get(dateKey) || 0) + 1);
     }
 
@@ -118,7 +125,9 @@ export function StatisticsPanel({ executions, overlaps, startDate, endDate }: St
   };
 
   const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
+    // new Date('YYYY-MM-DD') would parse as UTC midnight; build the local day instead
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 

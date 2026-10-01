@@ -31,7 +31,7 @@ export function AdminProjects() {
   }, []);
 
   const deleteProject = async (id: string, name: string): Promise<void> => {
-    if (!confirm(`Delete project "${name}" and all its data?`)) return;
+    if (!confirm(`Delete project "${name}"? Its shares are removed; its schedules are kept but unassigned.`)) return;
     try {
       await apiFetch(`/admin/projects/${id}`, { method: 'DELETE' });
       await loadProjects();

@@ -6,15 +6,37 @@ import type { Schedule, Project } from '../types';
 interface ScheduleListProps {
   schedules: Schedule[];
   projects?: Project[];
+  // Projects a schedule may be moved into; defaults to all projects
+  assignableProjects?: Project[];
   onRemove: (id: string) => void;
   onRename: (id: string, newLabel: string) => void;
   onAssignProject?: (scheduleId: string, projectId: string | undefined) => void;
+  // Whether the schedule may be renamed
+  canEdit?: (schedule: Schedule) => boolean;
+  // Whether the schedule may be removed or moved to another project
+  canManage?: (schedule: Schedule) => boolean;
 }
 
-export function ScheduleList({ schedules, projects = [], onRemove, onRename, onAssignProject }: ScheduleListProps) {
+const allowAll = (): boolean => true;
+
+export function ScheduleList({
+  schedules,
+  projects = [],
+  assignableProjects = projects,
+  onRemove,
+  onRename,
+  onAssignProject,
+  canEdit = allowAll,
+  canManage = allowAll,
+}: ScheduleListProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
+
+  const projectIds = new Set(projects.map((p) => p.id));
+  // A schedule whose project isn't listed (e.g. no longer shared) is shown as unassigned
+  const knownProjectId = (schedule: Schedule): string | undefined =>
+    schedule.projectId && projectIds.has(schedule.projectId) ? schedule.projectId : undefined;
 
   const startEditing = (schedule: Schedule): void => {
     setEditingId(schedule.id);
@@ -42,6 +64,29 @@ export function ScheduleList({ schedules, projects = [], onRemove, onRename, onA
     }
   };
 
+  const renderProjectSelect = (schedule: Schedule) => {
+    const currentProjectId = knownProjectId(schedule);
+    // Keep the current project selectable even if the user can't add schedules to it
+    const options = currentProjectId && !assignableProjects.some((p) => p.id === currentProjectId)
+      ? [...assignableProjects, projects.find((p) => p.id === currentProjectId)!]
+      : assignableProjects;
+
+    return (
+      <select
+        value={currentProjectId || ''}
+        onChange={(e) => onAssignProject?.(schedule.id, e.target.value || undefined)}
+        disabled={!canManage(schedule)}
+        className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-60"
+        title={canManage(schedule) ? 'Assign to project' : 'Only the owner can move this schedule'}
+      >
+        <option value="">No project</option>
+        {options.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+    );
+  };
+
   const renderScheduleItem = (schedule: Schedule) => (
     <div
       key={schedule.id}
@@ -63,12 +108,16 @@ export function ScheduleList({ schedules, projects = [], onRemove, onRename, onA
               autoFocus
               className="font-medium text-gray-800 dark:text-gray-200 bg-white dark:bg-gray-600 border border-blue-500 rounded px-1 py-0.5 w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-          ) : (
+          ) : canEdit(schedule) ? (
             <p
               className="font-medium text-gray-800 dark:text-gray-200 truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
               onClick={() => startEditing(schedule)}
               title="Click to rename"
             >
+              {schedule.label}
+            </p>
+          ) : (
+            <p className="font-medium text-gray-800 dark:text-gray-200 truncate" title="Shared with you (view only)">
               {schedule.label}
             </p>
           )}
@@ -81,25 +130,15 @@ export function ScheduleList({ schedules, projects = [], onRemove, onRename, onA
         </div>
       </div>
       <div className="flex items-center gap-2 ml-3">
-        {onAssignProject && projects.length > 0 && (
-          <select
-            value={schedule.projectId || ''}
-            onChange={(e) => onAssignProject(schedule.id, e.target.value || undefined)}
-            className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-600 text-gray-700 dark:text-gray-300"
-            title="Assign to project"
+        {onAssignProject && projects.length > 0 && renderProjectSelect(schedule)}
+        {canManage(schedule) && (
+          <button
+            onClick={() => onRemove(schedule.id)}
+            className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-md transition-colors"
           >
-            <option value="">No project</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+            Remove
+          </button>
         )}
-        <button
-          onClick={() => onRemove(schedule.id)}
-          className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-md transition-colors"
-        >
-          Remove
-        </button>
       </div>
     </div>
   );
@@ -123,7 +162,7 @@ export function ScheduleList({ schedules, projects = [], onRemove, onRename, onA
         const byProject = new Map<string | undefined, Schedule[]>();
 
         for (const schedule of schedules) {
-          const key = schedule.projectId;
+          const key = knownProjectId(schedule);
           if (!byProject.has(key)) byProject.set(key, []);
           byProject.get(key)!.push(schedule);
         }

@@ -10,14 +10,27 @@ interface ProjectManagerProps {
   onAdd: (name: string, color: string) => void;
   onRemove: (id: string) => void;
   onRename: (id: string, newName: string) => void;
+  // Whether the project may be renamed
+  canRename?: (project: Project) => boolean;
+  // Whether the project may be shared or deleted (owners only)
+  canManage?: (project: Project) => boolean;
 }
+
+const allowAll = (): boolean => true;
 
 const PROJECT_COLORS = [
   '#6366F1', '#EC4899', '#14B8A6', '#F97316',
   '#8B5CF6', '#EF4444', '#10B981', '#F59E0B',
 ];
 
-export function ProjectManager({ projects, onAdd, onRemove, onRename }: ProjectManagerProps) {
+export function ProjectManager({
+  projects,
+  onAdd,
+  onRemove,
+  onRename,
+  canRename = allowAll,
+  canManage = allowAll,
+}: ProjectManagerProps) {
   const { isAuthenticated } = useAuth();
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState('');
@@ -132,7 +145,7 @@ export function ProjectManager({ projects, onAdd, onRemove, onRename }: ProjectM
                   autoFocus
                   className="text-xs text-gray-800 dark:text-gray-200 bg-white dark:bg-gray-600 border border-blue-500 rounded px-1 py-0.5 w-full focus:outline-none"
                 />
-              ) : (
+              ) : canRename(project) ? (
                 <span
                   className="text-xs text-gray-700 dark:text-gray-300 truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   onClick={() => startEditing(project)}
@@ -140,10 +153,22 @@ export function ProjectManager({ projects, onAdd, onRemove, onRename }: ProjectM
                 >
                   {project.name}
                 </span>
+              ) : (
+                <span className="text-xs text-gray-700 dark:text-gray-300 truncate">
+                  {project.name}
+                </span>
+              )}
+              {(project.role === 'view' || project.role === 'edit') && (
+                <span
+                  className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0"
+                  title={project.role === 'view' ? 'Shared with you (view only)' : 'Shared with you (can edit)'}
+                >
+                  shared
+                </span>
               )}
             </div>
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
-              {isAuthenticated && (
+              {isAuthenticated && canManage(project) && (
                 <button
                   onClick={() => setSharingProject(project)}
                   className="text-xs text-blue-500 hover:text-blue-700 dark:hover:text-blue-400"
@@ -154,12 +179,14 @@ export function ProjectManager({ projects, onAdd, onRemove, onRename }: ProjectM
                   </svg>
                 </button>
               )}
-              <button
-                onClick={() => onRemove(project.id)}
-                className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400"
-              >
-                &times;
-              </button>
+              {canManage(project) && (
+                <button
+                  onClick={() => onRemove(project.id)}
+                  className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400"
+                >
+                  &times;
+                </button>
+              )}
             </div>
           </div>
         ))}

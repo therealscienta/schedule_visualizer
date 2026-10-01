@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { getDatabase } from '../db/connection';
+import { getDatabase, isUniqueViolation } from '../db/connection';
 import { authMiddleware } from '../middleware/auth';
 import { AuthRequest } from '../types';
 
@@ -17,7 +17,7 @@ const createScheduleSchema = z.object({
   cronExpression: z.string().min(1),
   color: z.string().min(1),
   durationMinutes: z.number().int().min(0).optional().default(0),
-  projectId: z.string().optional(),
+  projectId: z.string().nullable().optional(),
 });
 
 const updateScheduleSchema = z.object({
@@ -73,25 +73,19 @@ router.get('/', (req: AuthRequest, res: Response, next) => {
   try {
     const db = getDatabase();
 
-    // Get schedules owned by the user
-    const ownedSchedules = db.prepare(`
-      SELECT id, owner_id, project_id, label, cron_expression, color, duration_minutes, created_at, updated_at
-      FROM schedules
-      WHERE owner_id = ?
-      ORDER BY created_at DESC
-    `).all(req.user!.id);
-
-    // Get schedules from shared projects
-    const sharedSchedules = db.prepare(`
-      SELECT DISTINCT s.id, s.owner_id, s.project_id, s.label, s.cron_expression, s.color, s.duration_minutes, s.created_at, s.updated_at
+    // Schedules the user owns, plus every schedule in a project the user owns or has
+    // been shared (including ones other members added to the user's own projects)
+    const schedules = db.prepare(`
+      SELECT s.id, s.owner_id, s.project_id, s.label, s.cron_expression, s.color, s.duration_minutes, s.created_at, s.updated_at
       FROM schedules s
-      JOIN project_shares ps ON s.project_id = ps.project_id
-      WHERE ps.shared_with_user_id = ? AND s.owner_id != ?
+      LEFT JOIN projects p ON s.project_id = p.id
+      LEFT JOIN project_shares ps ON ps.project_id = s.project_id AND ps.shared_with_user_id = ?
+      WHERE s.owner_id = ? OR p.owner_id = ? OR ps.id IS NOT NULL
       ORDER BY s.created_at DESC
-    `).all(req.user!.id, req.user!.id);
+    `).all(req.user!.id, req.user!.id, req.user!.id);
 
-    // Combine and format results
-    const allSchedules = [...ownedSchedules, ...sharedSchedules].map((s: any) => ({
+    // Format results
+    const allSchedules = schedules.map((s: any) => ({
       id: s.id,
       ownerId: s.owner_id,
       projectId: s.project_id,
@@ -136,7 +130,15 @@ router.post('/', (req: AuthRequest, res: Response, next) => {
       INSERT INTO schedules (id, owner_id, project_id, label, cron_expression, color, duration_minutes)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(id, req.user!.id, projectId || null, label, cronExpression, color, durationMinutes);
+    try {
+      stmt.run(id, req.user!.id, projectId || null, label, cronExpression, color, durationMinutes);
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        res.status(409).json({ error: 'A schedule with this id already exists' });
+        return;
+      }
+      throw err;
+    }
 
     // Fetch and return the created schedule
     const schedule = db.prepare(`
@@ -198,9 +200,16 @@ router.put('/:id', (req: AuthRequest, res: Response, next) => {
 
     const updates = validation.data;
 
-    // If updating projectId, verify access to new project
-    if (updates.projectId !== undefined && updates.projectId !== null) {
-      if (!hasProjectAccess(req.user!.id, updates.projectId, true)) {
+    // Moving a schedule to another project (or out of one) is reserved for its owner,
+    // and the owner needs edit access to the destination. An empty projectId means no project.
+    const targetProjectId = updates.projectId === undefined ? undefined : updates.projectId || null;
+    const isMove = targetProjectId !== undefined && targetProjectId !== schedule.project_id;
+    if (isMove) {
+      if (schedule.owner_id !== req.user!.id) {
+        res.status(403).json({ error: 'Only the owner can move this schedule to another project' });
+        return;
+      }
+      if (targetProjectId && !hasProjectAccess(req.user!.id, targetProjectId, true)) {
         res.status(403).json({ error: 'No access to the specified project' });
         return;
       }
@@ -226,9 +235,9 @@ router.put('/:id', (req: AuthRequest, res: Response, next) => {
       fields.push('duration_minutes = ?');
       values.push(updates.durationMinutes);
     }
-    if (updates.projectId !== undefined) {
+    if (targetProjectId !== undefined) {
       fields.push('project_id = ?');
-      values.push(updates.projectId);
+      values.push(targetProjectId);
     }
 
     if (fields.length === 0) {
@@ -236,7 +245,7 @@ router.put('/:id', (req: AuthRequest, res: Response, next) => {
       return;
     }
 
-    fields.push('updated_at = datetime("now")');
+    fields.push("updated_at = datetime('now')");
     values.push(id);
 
     const stmt = db.prepare(`
@@ -310,6 +319,15 @@ router.post('/sync', (req: AuthRequest, res: Response, next) => {
     const { schedules } = validation.data;
     const db = getDatabase();
 
+    // Same rule as creating schedules one by one: only into projects the user can edit
+    const projectIds = new Set(schedules.map((s) => s.projectId).filter((p): p is string => !!p));
+    for (const projectId of projectIds) {
+      if (!hasProjectAccess(req.user!.id, projectId, true)) {
+        res.status(403).json({ error: 'No access to this project or insufficient permissions' });
+        return;
+      }
+    }
+
     // Start a transaction
     const deleteStmt = db.prepare('DELETE FROM schedules WHERE owner_id = ?');
     const insertStmt = db.prepare(`
@@ -335,7 +353,15 @@ router.post('/sync', (req: AuthRequest, res: Response, next) => {
       }
     });
 
-    transaction(req.user!.id, schedules);
+    try {
+      transaction(req.user!.id, schedules);
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        res.status(409).json({ error: 'One or more schedule ids already exist' });
+        return;
+      }
+      throw err;
+    }
 
     // Fetch and return all schedules
     const insertedSchedules = db.prepare(`

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { apiFetch } from '../utils/api';
+import { apiFetch, ApiError, setUnauthorizedHandler } from '../utils/api';
 import type { User } from '../types';
 
 interface AuthState {
@@ -19,9 +19,27 @@ interface AuthResponse {
   user: User;
 }
 
+// While signed in, localStorage caches the account's data; it must not outlive the session
+function clearCachedAccountData(): void {
+  localStorage.removeItem('schedules');
+  localStorage.removeItem('projects');
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('authToken');
+    clearCachedAccountData();
+    setUser(null);
+  }, []);
+
+  // Sign out whenever the server rejects the session
+  useEffect(() => {
+    setUnauthorizedHandler(logout);
+    return () => setUnauthorizedHandler(null);
+  }, [logout]);
 
   // Check for existing token on mount
   useEffect(() => {
@@ -29,14 +47,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (token) {
       apiFetch<User>('/auth/me')
         .then(setUser)
-        .catch(() => {
-          localStorage.removeItem('authToken');
+        .catch((err) => {
+          // Only a rejected session ends it; if the server is unreachable, keep the token for next time
+          if (err instanceof ApiError && (err.statusCode === 401 || err.statusCode === 404)) {
+            logout();
+          } else {
+            console.warn('Could not verify session:', err);
+          }
         })
         .finally(() => setIsLoading(false));
     } else {
       setIsLoading(false);
     }
-  }, []);
+  }, [logout]);
 
   const syncLocalStorageToServer = useCallback(async () => {
     try {
@@ -51,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (serverSchedules.length > 0 || serverProjects.length > 0) return;
 
       // Upload localStorage projects first
+      const projectIds = new Set<string>();
       if (storedProjects) {
         const projects = JSON.parse(storedProjects);
         for (const p of projects) {
@@ -58,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             method: 'POST',
             body: JSON.stringify({ name: p.name, color: p.color, id: p.id }),
           });
+          projectIds.add(p.id);
         }
       }
 
@@ -72,7 +97,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             cronExpression: s.cronExpression,
             color: s.color,
             durationMinutes: s.durationMinutes || 0,
-            projectId: s.projectId || null,
+            // References to projects that weren't uploaded would be rejected
+            projectId: typeof s.projectId === 'string' && projectIds.has(s.projectId) ? s.projectId : null,
           }))})
         });
       }
@@ -81,30 +107,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const startSession = useCallback(async (data: AuthResponse) => {
+    // With a token already present, localStorage holds another session's cached data,
+    // not guest data, so it must not be uploaded into this account
+    const replacesSession = !!localStorage.getItem('authToken');
+    localStorage.setItem('authToken', data.token);
+    setUser(data.user);
+    if (replacesSession) {
+      clearCachedAccountData();
+    } else {
+      await syncLocalStorageToServer();
+    }
+  }, [syncLocalStorageToServer]);
+
   const login = useCallback(async (identifier: string, password: string) => {
     const data = await apiFetch<AuthResponse>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ identifier, password }),
     });
-    localStorage.setItem('authToken', data.token);
-    setUser(data.user);
-    await syncLocalStorageToServer();
-  }, [syncLocalStorageToServer]);
+    await startSession(data);
+  }, [startSession]);
 
   const register = useCallback(async (username: string, email: string, password: string) => {
     const data = await apiFetch<AuthResponse>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ username, email, password }),
     });
-    localStorage.setItem('authToken', data.token);
-    setUser(data.user);
-    await syncLocalStorageToServer();
-  }, [syncLocalStorageToServer]);
-
-  const logout = useCallback(() => {
-    localStorage.removeItem('authToken');
-    setUser(null);
-  }, []);
+    await startSession(data);
+  }, [startSession]);
 
   return (
     <AuthContext.Provider

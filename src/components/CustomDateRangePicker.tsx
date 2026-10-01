@@ -10,26 +10,31 @@ interface CustomDateRangePickerProps {
   currentRange?: CustomDateRange;
 }
 
-export function CustomDateRangePicker({
-  isOpen,
-  onClose,
-  onApply,
-  currentRange,
-}: CustomDateRangePickerProps) {
-  const [startDate, setStartDate] = useState<string>(() => {
-    if (currentRange) {
-      return currentRange.startDate.toISOString().slice(0, 16);
-    }
-    return new Date().toISOString().slice(0, 16);
-  });
+const pad = (n: number): string => String(n).padStart(2, '0');
+
+// datetime-local inputs take local wall-clock time ("YYYY-MM-DDTHH:mm"), not UTC
+function toLocalInputValue(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function CustomDateRangePicker(props: CustomDateRangePickerProps) {
+  if (!props.isOpen) return null;
+  // Mounted per opening, so the fields start from the current range (or now) every time
+  return <DateRangeDialog {...props} />;
+}
+
+function DateRangeDialog({ onClose, onApply, currentRange }: CustomDateRangePickerProps) {
+  const [startDate, setStartDate] = useState<string>(() =>
+    toLocalInputValue(currentRange ? currentRange.startDate : new Date())
+  );
 
   const [endDate, setEndDate] = useState<string>(() => {
     if (currentRange) {
-      return currentRange.endDate.toISOString().slice(0, 16);
+      return toLocalInputValue(currentRange.endDate);
     }
     const end = new Date();
     end.setDate(end.getDate() + 7);
-    return end.toISOString().slice(0, 16);
+    return toLocalInputValue(end);
   });
 
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +42,11 @@ export function CustomDateRangePicker({
   const handleApply = (): void => {
     const start = new Date(startDate);
     const end = new Date(endDate);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      setError('Please enter both a start and an end date');
+      return;
+    }
 
     if (start >= end) {
       setError('Start date must be before end date');
@@ -55,8 +65,6 @@ export function CustomDateRangePicker({
     setError(null);
     onClose();
   };
-
-  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

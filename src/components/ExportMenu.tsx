@@ -60,9 +60,14 @@ export function ExportMenu({ timelineRef, schedules, projects = [] }: ExportMenu
   const handleExportJSON = async (): Promise<void> => {
     setIsExporting(true);
     try {
-      const exportData = projects.length > 0
-        ? { schedules, projects }
-        : schedules;
+      // Only the portable fields; ownership and sharing roles are specific to this account
+      const portableSchedules = schedules.map(({ id, label, cronExpression, color, durationMinutes, projectId }) => ({
+        id, label, cronExpression, color, durationMinutes, projectId,
+      }));
+      const portableProjects = projects.map(({ id, name, color }) => ({ id, name, color }));
+      const exportData = portableProjects.length > 0
+        ? { schedules: portableSchedules, projects: portableProjects }
+        : portableSchedules;
       await exportToJSON(exportData, `schedules-${Date.now()}.json`);
     } catch (error) {
       console.error('Export failed:', error);

@@ -1,7 +1,8 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { getDatabase } from '../db/connection';
+import { getDatabase, isUniqueViolation } from '../db/connection';
+import { findUserByIdentifier } from '../db/users';
 import { authMiddleware } from '../middleware/auth';
 import { AuthRequest } from '../types';
 
@@ -45,11 +46,7 @@ router.post('/:id/share', (req: AuthRequest, res: Response, next) => {
     }
 
     // Find the user to share with
-    const targetUser = db.prepare(`
-      SELECT id, username, email
-      FROM users
-      WHERE username = ? OR email = ?
-    `).get(identifier, identifier) as any;
+    const targetUser = findUserByIdentifier<any>(identifier, 'id, username, email');
 
     if (!targetUser) {
       res.status(404).json({ error: 'User not found' });
@@ -80,9 +77,9 @@ router.post('/:id/share', (req: AuthRequest, res: Response, next) => {
         email: targetUser.email,
         permission,
       });
-    } catch (err: any) {
+    } catch (err) {
       // Handle unique constraint violation (already shared)
-      if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.message.includes('UNIQUE')) {
+      if (isUniqueViolation(err)) {
         // Update existing share
         const updateStmt = db.prepare(`
           UPDATE project_shares

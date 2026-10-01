@@ -4,6 +4,13 @@ function getAuthToken(): string | null {
   return localStorage.getItem('authToken');
 }
 
+let unauthorizedHandler: (() => void) | null = null;
+
+// Called when the server rejects the stored token (expired, disabled or deleted account)
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
@@ -25,6 +32,11 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: 'Request failed' }));
+    // Wrong credentials on the login form are a 401 too, but don't end a session
+    const isCredentialCheck = path === '/auth/login' || path === '/auth/register';
+    if (response.status === 401 && token && !isCredentialCheck) {
+      unauthorizedHandler?.();
+    }
     throw new ApiError(body.error || 'Request failed', response.status);
   }
 

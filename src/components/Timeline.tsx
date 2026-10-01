@@ -1,9 +1,9 @@
 // src/components/Timeline.tsx
 
-import { useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import type { Schedule, Project, TimeRange, CustomDateRange } from '../types';
 import { TIME_RANGE_CONFIGS } from '../types';
-import { generateExecutions, detectOverlaps } from '../utils/cronParser';
+import { generateExecutionsWithLimit, detectOverlaps, MAX_EXECUTIONS_PER_SCHEDULE } from '../utils/cronParser';
 import { useSettings } from '../contexts/SettingsContext';
 import { formatTimestamp } from '../utils/formatTime';
 import { StatisticsPanel } from './StatisticsPanel';
@@ -11,16 +11,25 @@ import { ExportMenu } from './ExportMenu';
 
 interface TimelineProps {
   schedules: Schedule[];
+  // Every schedule, including ones hidden by a project filter (used for the JSON export)
+  allSchedules?: Schedule[];
   projects?: Project[];
   timeRange: TimeRange;
   customDateRange?: CustomDateRange | null;
 }
 
-export function Timeline({ schedules, projects = [], timeRange, customDateRange }: TimelineProps) {
+export function Timeline({ schedules, allSchedules = schedules, projects = [], timeRange, customDateRange }: TimelineProps) {
   const { timeFormat, timelineMode } = useSettings();
   const [showStats, setShowStats] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(1);
+  const [now, setNow] = useState(() => new Date());
   const timelineRef = useRef<HTMLDivElement>(null);
+
+  // Keep the preset ranges ("next 24 hours" etc.) anchored to the current time
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60 * 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const handleZoomIn = (): void => {
     setZoomLevel((prev) => Math.min(prev + 0.25, 3));
@@ -38,8 +47,8 @@ export function Timeline({ schedules, projects = [], timeRange, customDateRange 
     if (timeRange === 'custom' && customDateRange) {
       return customDateRange.startDate;
     }
-    return new Date();
-  }, [timeRange, customDateRange]);
+    return now;
+  }, [timeRange, customDateRange, now]);
 
   const endDate = useMemo(() => {
     if (timeRange === 'custom' && customDateRange) {
@@ -54,10 +63,10 @@ export function Timeline({ schedules, projects = [], timeRange, customDateRange 
     return diffMs / (1000 * 60 * 60);
   }, [startDate, endDate]);
 
-  const { executions, overlaps } = useMemo(() => {
-    const execs = generateExecutions(schedules, startDate, hours);
+  const { executions, overlaps, truncatedScheduleIds } = useMemo(() => {
+    const { executions: execs, truncatedScheduleIds } = generateExecutionsWithLimit(schedules, startDate, hours);
     const overlaps = detectOverlaps(execs);
-    return { executions: execs, overlaps };
+    return { executions: execs, overlaps, truncatedScheduleIds: new Set(truncatedScheduleIds) };
   }, [schedules, startDate, hours]);
 
   if (schedules.length === 0) {
@@ -82,7 +91,8 @@ export function Timeline({ schedules, projects = [], timeRange, customDateRange 
     const duration = end.getTime() - start.getTime();
     if (duration === 0) return 0;
     const widthPct = (duration / totalDuration) * 100;
-    return Math.max(widthPct, 0.15);
+    // Runs that continue past the end of the range stop at the edge
+    return Math.min(Math.max(widthPct, 0.15), 100 - getTimelinePosition(start));
   };
 
   const fmt = (date: Date): string => formatTimestamp(date, timeFormat);
@@ -164,14 +174,24 @@ export function Timeline({ schedules, projects = [], timeRange, customDateRange 
                 </button>
               )}
             </div>
-            <ExportMenu timelineRef={timelineRef} schedules={schedules} projects={projects} />
+            <ExportMenu timelineRef={timelineRef} schedules={allSchedules} projects={projects} />
             <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 w-full sm:w-auto text-center sm:text-left">
               {fmt(startDate)} - {fmt(endDate)}
             </div>
           </div>
         </div>
 
-      <div className="space-y-6 overflow-x-auto" style={{ transform: `scaleX(${zoomLevel})`, transformOrigin: 'left center', transition: 'transform 0.2s ease' }}>
+        {truncatedScheduleIds.size > 0 && (
+          <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-md text-sm text-amber-800 dark:text-amber-300">
+            Some schedules run more than {MAX_EXECUTIONS_PER_SCHEDULE.toLocaleString('en-US')} times in this range, so only
+            their first {MAX_EXECUTIONS_PER_SCHEDULE.toLocaleString('en-US')} runs are shown and the statistics are partial.
+            Choose a shorter range to see every run.
+          </div>
+        )}
+
+      {/* Zoom widens the content and scrolls horizontally, instead of stretching it */}
+      <div className="overflow-x-auto">
+      <div className="space-y-6" style={{ width: `${zoomLevel * 100}%`, transition: 'width 0.2s ease' }}>
         {/* Time axis */}
         <div className="relative h-8 border-b-2 border-gray-300 dark:border-gray-600">
           {timeMarkers.map((marker, idx) => {
@@ -217,7 +237,9 @@ export function Timeline({ schedules, projects = [], timeRange, customDateRange 
                       {schedule.label}
                     </span>
                     <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
-                      ({scheduleExecutions.length} executions)
+                      {truncatedScheduleIds.has(schedule.id)
+                        ? `(${scheduleExecutions.length}+ executions, truncated)`
+                        : `(${scheduleExecutions.length} executions)`}
                     </span>
                   </div>
 
@@ -398,6 +420,7 @@ export function Timeline({ schedules, projects = [], timeRange, customDateRange 
             </div>
           )}
         </div>
+      </div>
       </div>
 
         {executions.length === 0 && (

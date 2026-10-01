@@ -22,6 +22,11 @@ export function RegisterPage() {
       return;
     }
 
+    if (username.includes('@')) {
+      setError('Username cannot contain "@"');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await register(username, email, password);
