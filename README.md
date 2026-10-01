@@ -36,24 +36,22 @@ npm run dev:all
 
 ### Docker
 
+`JWT_SECRET` is required: Docker Compose refuses to start without it, and the server refuses to start in production with a missing or placeholder secret. Put a long random value in a `.env` file next to `docker-compose.yml`:
+
 ```bash
+echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+
 # Using Docker Compose
 docker compose up -d
 
-# The app will be available at http://localhost:8080
-```
-
-**Important:** Set `JWT_SECRET` to a secure value in production:
-
-```bash
-JWT_SECRET=your-secure-secret docker compose up -d
+# The app will be available at http://localhost:3001
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `JWT_SECRET` | `dev-secret-change-in-production` | Secret for JWT tokens. **Change in production.** |
+| `JWT_SECRET` | `dev-secret-change-in-production` (development only) | Secret for JWT tokens. **Required in production**; placeholder values are rejected. |
 | `PORT` | `3001` | Backend server port |
 | `DB_PATH` | `./data/schedules.db` | SQLite database file path |
 | `NODE_ENV` | `development` | `development` or `production` |

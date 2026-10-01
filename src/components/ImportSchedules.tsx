@@ -4,7 +4,38 @@ import { useRef } from 'react';
 import type { Schedule, Project } from '../types';
 
 interface ImportSchedulesProps {
-  onImport: (data: { schedules: Schedule[]; projects?: Project[] }) => void;
+  onImport: (data: { schedules: Schedule[]; projects?: Project[] }) => void | Promise<void>;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+function toSchedule(item: unknown): Schedule {
+  if (
+    !isRecord(item) ||
+    typeof item.id !== 'string' ||
+    typeof item.label !== 'string' ||
+    typeof item.cronExpression !== 'string' ||
+    typeof item.color !== 'string'
+  ) {
+    throw new Error('Invalid schedule format');
+  }
+  // Keep only the known fields; durationMinutes was added later, so default it
+  return {
+    id: item.id,
+    label: item.label,
+    cronExpression: item.cronExpression,
+    color: item.color,
+    durationMinutes: typeof item.durationMinutes === 'number' ? item.durationMinutes : 0,
+    projectId: typeof item.projectId === 'string' ? item.projectId : undefined,
+  };
+}
+
+function toProject(item: unknown): Project {
+  if (!isRecord(item) || typeof item.id !== 'string' || typeof item.name !== 'string' || typeof item.color !== 'string') {
+    throw new Error('Invalid project format');
+  }
+  return { id: item.id, name: item.name, color: item.color };
 }
 
 export function ImportSchedules({ onImport }: ImportSchedulesProps) {
@@ -16,52 +47,35 @@ export function ImportSchedules({ onImport }: ImportSchedulesProps) {
 
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
+      const data: unknown = JSON.parse(text);
 
       // Support both legacy array format and new { schedules, projects } object format
-      let schedulesArray: any[];
-      let projectsArray: any[] | undefined;
+      let schedulesArray: unknown[];
+      let projectsArray: unknown[] | undefined;
 
       if (Array.isArray(data)) {
         schedulesArray = data;
-      } else if (data && typeof data === 'object' && Array.isArray(data.schedules)) {
+      } else if (isRecord(data) && Array.isArray(data.schedules)) {
         schedulesArray = data.schedules;
         projectsArray = Array.isArray(data.projects) ? data.projects : undefined;
       } else {
         throw new Error('Invalid file format: expected an array of schedules or { schedules, projects }');
       }
 
-      // Validate each schedule has required fields
-      const isValid = schedulesArray.every(
-        (item: any) =>
-          typeof item === 'object' &&
-          typeof item.id === 'string' &&
-          typeof item.label === 'string' &&
-          typeof item.cronExpression === 'string' &&
-          typeof item.color === 'string'
-      );
+      const schedules = schedulesArray.map(toSchedule);
+      const projects = projectsArray?.map(toProject);
 
-      if (!isValid) {
-        throw new Error('Invalid schedule format');
-      }
+      await onImport({ schedules, projects });
 
-      // Migration: add durationMinutes if missing
-      const migrated = schedulesArray.map((s: any) => ({
-        ...s,
-        durationMinutes: s.durationMinutes ?? 0,
-      }));
-
-      onImport({ schedules: migrated, projects: projectsArray });
-
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-
-      alert(`Successfully imported ${schedulesArray.length} schedule(s)${projectsArray ? ` and ${projectsArray.length} project(s)` : ''}`);
+      alert(`Successfully imported ${schedules.length} schedule(s)${projects ? ` and ${projects.length} project(s)` : ''}`);
     } catch (error) {
       console.error('Import failed:', error);
       alert(`Failed to import schedules: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      // Reset file input so the same file can be picked again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 

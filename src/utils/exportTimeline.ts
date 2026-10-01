@@ -2,6 +2,23 @@
 
 import html2canvas from 'html2canvas';
 
+// Some browsers only download from links that are in the document, and cancel the
+// download if its object URL is revoked straight away
+function downloadUrl(href: string, filename: string): void {
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = href;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  downloadUrl(url, filename);
+  setTimeout(() => URL.revokeObjectURL(url), 40 * 1000);
+}
+
 export async function exportToPNG(element: HTMLElement, filename: string = 'timeline.png'): Promise<void> {
   try {
     const canvas = await html2canvas(element, {
@@ -10,11 +27,7 @@ export async function exportToPNG(element: HTMLElement, filename: string = 'time
       logging: false,
     });
 
-    const dataUrl = canvas.toDataURL('image/png');
-    const link = document.createElement('a');
-    link.download = filename;
-    link.href = dataUrl;
-    link.click();
+    downloadUrl(canvas.toDataURL('image/png'), filename);
   } catch (error) {
     console.error('Failed to export PNG:', error);
     throw error;
@@ -26,20 +39,27 @@ export function exportToSVG(element: HTMLElement, filename: string = 'timeline.s
     const svgElement = createSVGFromElement(element);
     const serializer = new XMLSerializer();
     const svgString = serializer.serializeToString(svgElement);
-    const blob = new Blob([svgString], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = filename;
-    link.href = url;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob([svgString], { type: 'image/svg+xml' }), filename);
   } catch (error) {
     console.error('Failed to export SVG:', error);
     throw error;
   }
 }
 
-function createSVGFromElement(element: HTMLElement): SVGSVGElement {
+// The page's CSS rules as text (stylesheets from other origins can't be read and are skipped)
+function collectPageCss(): string {
+  return Array.from(document.styleSheets)
+    .map((sheet) => {
+      try {
+        return Array.from(sheet.cssRules).map((rule) => rule.cssText).join('\n');
+      } catch {
+        return '';
+      }
+    })
+    .join('\n');
+}
+
+export function createSVGFromElement(element: HTMLElement): SVGSVGElement {
   const bbox = element.getBoundingClientRect();
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', bbox.width.toString());
@@ -51,9 +71,18 @@ function createSVGFromElement(element: HTMLElement): SVGSVGElement {
   foreignObject.setAttribute('width', '100%');
   foreignObject.setAttribute('height', '100%');
 
+  // The clone keeps its utility classes, so the file needs the page's CSS, plus the
+  // root's classes (e.g. "dark") for variants that depend on them
+  const wrapper = document.createElement('div');
+  wrapper.className = document.documentElement.className;
+  const style = document.createElement('style');
+  style.textContent = collectPageCss();
+  wrapper.appendChild(style);
+
   // Clone the element
   const clone = element.cloneNode(true) as HTMLElement;
-  foreignObject.appendChild(clone);
+  wrapper.appendChild(clone);
+  foreignObject.appendChild(wrapper);
   svg.appendChild(foreignObject);
 
   return svg;
@@ -62,13 +91,7 @@ function createSVGFromElement(element: HTMLElement): SVGSVGElement {
 export async function exportToJSON(data: unknown, filename: string = 'schedules.json'): Promise<void> {
   try {
     const jsonString = JSON.stringify(data, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = filename;
-    link.href = url;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob([jsonString], { type: 'application/json' }), filename);
   } catch (error) {
     console.error('Failed to export JSON:', error);
     throw error;

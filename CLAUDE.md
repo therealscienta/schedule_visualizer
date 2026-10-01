@@ -31,7 +31,7 @@ The application includes three default example schedules on first load to demons
 - **TypeScript 5.2** - Type-safe JavaScript
 - **Vite 5.2** - Build tool and dev server (proxies `/api` to backend)
 - **Tailwind CSS 3.4** - Utility-first styling
-- **cron-parser 4.9** - Cron expression parsing and execution generation
+- **cron-parser 5.10** - Cron expression parsing and execution generation (4.x was ~40x slower for minute-level schedules)
 - **html2canvas** - PNG export functionality
 - **Vitest** - Unit testing framework
 
@@ -73,15 +73,16 @@ node server/dist/index.js   # Serves both API and SPA from port 3001
 ### Docker Deployment
 
 ```bash
-# Build and run with Docker Compose
+# JWT_SECRET is required; compose reads it from .env
+echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+
+# Build and run with Docker Compose (http://localhost:3001)
 docker compose up -d
 
-# Or build the image directly
+# Or build the image directly (http://localhost:8080)
 docker build -t schedule-visualiser .
-docker run -p 8080:3001 -v ./data:/app/data -e JWT_SECRET=your-secret schedule-visualiser
+docker run -p 8080:3001 -v ./data:/app/data -e JWT_SECRET="$(openssl rand -hex 32)" schedule-visualiser
 ```
-
-The app will be available at `http://localhost:8080`.
 
 ### Type Checking
 
@@ -93,17 +94,20 @@ cd server && npx tsc --noEmit # Backend type check
 ### Testing
 
 ```bash
-npm test              # Run tests once
+npm test              # Run tests once (frontend + backend)
 npm run test:watch    # Watch mode
-npm run test:coverage # With coverage report
+npm run test:coverage # With coverage report (fails below the 80% thresholds)
+npm run lint          # ESLint (.eslintrc.cjs)
 ```
+
+Vitest runs two projects (see `vitest.config.ts`): `web` (jsdom, `src/**/*.test.tsx?`) and `server` (Node, `server/test/**/*.test.ts`, against an in-memory SQLite database via `createApp()`). The server project needs `server/node_modules` installed.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3001` | Backend server port |
-| `JWT_SECRET` | `dev-secret-change-in-production` | **Must change in production.** Secret for signing JWT tokens |
+| `JWT_SECRET` | `dev-secret-change-in-production` (development only) | Secret for signing JWT tokens. **Required in production**: the server refuses to start without it or with a known placeholder value |
 | `DB_PATH` | `./data/schedules.db` | Path to SQLite database file |
 | `NODE_ENV` | `development` | `development` or `production` |
 
@@ -163,15 +167,19 @@ schedule-visualiser/
 ├── server/
 │   ├── package.json             # Backend dependencies
 │   ├── tsconfig.json            # Backend TypeScript config
+│   ├── test/
+│   │   └── api.test.ts          # API tests (run by the root `npm test`)
 │   └── src/
-│       ├── index.ts             # Express app setup, route mounting, static serving
+│       ├── index.ts             # Starts the server
+│       ├── app.ts               # createApp(): Express app setup, route mounting, static serving
 │       ├── config.ts            # Environment variable configuration
 │       ├── types.ts             # AuthUser and AuthRequest types
 │       ├── db/
 │       │   ├── connection.ts    # SQLite connection (singleton, WAL mode)
-│       │   └── schema.ts       # Table creation (users, projects, schedules, project_shares)
+│       │   ├── schema.ts       # Table creation (users, projects, schedules, project_shares)
+│       │   └── users.ts         # Username/email lookup (emails take precedence)
 │       ├── middleware/
-│       │   ├── auth.ts          # JWT verification middleware
+│       │   ├── auth.ts          # JWT verification + per-request account check
 │       │   ├── admin.ts         # Admin role check middleware
 │       │   └── errorHandler.ts  # Global error handler
 │       └── routes/
@@ -198,17 +206,17 @@ All API routes are prefixed with `/api`.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/` | Yes | List all accessible schedules (owned + shared) |
-| POST | `/` | Yes | Create a schedule |
-| PUT | `/:id` | Yes | Update a schedule (owner or edit permission) |
+| POST | `/` | Yes | Create a schedule (`projectId` may be null; 409 if the id exists) |
+| PUT | `/:id` | Yes | Update a schedule (owner or edit permission; only the owner can move it to another project) |
 | DELETE | `/:id` | Yes | Delete a schedule (owner only) |
-| POST | `/sync` | Yes | Bulk sync from localStorage (replaces all owned schedules) |
+| POST | `/sync` | Yes | Bulk sync from localStorage (replaces all owned schedules; only into projects the user can edit) |
 
 ### Projects (`/api/projects`)
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/` | Yes | List all accessible projects (owned + shared, includes role) |
-| POST | `/` | Yes | Create a project |
-| PUT | `/:id` | Yes | Update a project (owner or edit permission) |
+| POST | `/` | Yes | Create a project (409 if the id exists) |
+| PUT | `/:id` | Yes | Update a project (owner or edit permission; 404 if it doesn't exist) |
 | DELETE | `/:id` | Yes | Delete a project (owner only, cascades) |
 
 ### Sharing (`/api/projects`)
@@ -249,20 +257,24 @@ Foreign keys are enforced. Projects cascade-delete their shares. Users cascade-d
 ### Authentication
 - JWT tokens stored in localStorage, sent as `Bearer` header
 - First registered user automatically becomes admin
-- Tokens expire after 7 days
-- Login accepts username or email as identifier
+- Tokens expire after 7 days, but every request re-reads the account: disabling, deleting or demoting a user takes effect immediately, and the frontend signs out on any 401
+- Login and sharing accept username or email; an email match wins over a username match, and usernames can't contain `@`
+- Server errors (5xx) return a generic message; details are only logged
 
 ### Data Sync Strategy
 - Unauthenticated: all data in localStorage with default example schedules
 - On first login: localStorage schedules are synced to server (if server has no data)
 - Authenticated: server is the source of truth; `useServerDataLoader` loads on auth change
 - `refreshFromServer()` can be triggered manually (refresh button) or automatically (tab focus)
-- localStorage still used as cache/fallback
+- Changes are applied optimistically; if the server rejects one, an error banner is shown and data is reloaded from the server
+- Import while signed in adds/updates the imported projects and schedules on the server (nothing is deleted); as a guest it replaces local data
+- localStorage still used as cache/fallback; signing out clears it, and the main view remounts per user
 
 ### Sharing Model
 - Projects are the unit of sharing (not individual schedules)
 - Share permissions: `view` (read-only) or `edit` (can modify schedules in the project)
-- `GET /schedules` returns both owned schedules and schedules in shared projects
+- `GET /schedules` returns owned schedules plus every schedule in projects the user owns or that are shared with the user
+- The UI only offers actions the role allows (`role` on projects, `ownerId` on schedules)
 - `GET /projects` returns both owned projects and shared projects (with role field)
 
 ### Frontend Routing

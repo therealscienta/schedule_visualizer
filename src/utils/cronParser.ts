@@ -1,15 +1,88 @@
 // src/utils/cronParser.ts
 
-import { parseExpression } from 'cron-parser';
+import { CronExpressionParser, type CronExpression } from 'cron-parser';
 import type { ScheduleExecution, OverlapExecution, Schedule } from '../types';
 
+// Upper bound per schedule so a very frequent schedule can't freeze the page
+export const MAX_EXECUTIONS_PER_SCHEDULE = 10000;
+
+// Hashed values (H) are a Jenkins extension; they'd render at an arbitrary minute
+const HASHED_VALUE = /(^|[\s,])H(?=$|[\s,(/])/;
+
 export function validateCronExpression(expression: string): boolean {
+  const trimmed = expression.trim();
+  // Standard 5-field expressions or predefined aliases like @daily (no seconds field)
+  if (!trimmed.startsWith('@') && trimmed.split(/\s+/).length !== 5) return false;
+  if (HASHED_VALUE.test(trimmed)) return false;
   try {
-    parseExpression(expression);
-    return true;
+    const { fields } = CronExpressionParser.parse(trimmed);
+    // Reject sub-minute aliases such as @secondly
+    return fields.second.values.length === 1 && fields.second.values[0] === 0;
   } catch {
     return false;
   }
+}
+
+// The next run, or null once the iteration passes its endDate
+function nextRun(interval: CronExpression): Date | null {
+  try {
+    return interval.next().toDate();
+  } catch {
+    return null;
+  }
+}
+
+export interface GeneratedExecutions {
+  executions: ScheduleExecution[];
+  // Schedules that hit MAX_EXECUTIONS_PER_SCHEDULE and were cut off
+  truncatedScheduleIds: string[];
+}
+
+// Executions in the half-open range [startDate, startDate + hours)
+export function generateExecutionsWithLimit(
+  schedules: Schedule[],
+  startDate: Date,
+  hours: number,
+  limit: number = MAX_EXECUTIONS_PER_SCHEDULE
+): GeneratedExecutions {
+  const endDate = new Date(startDate.getTime() + hours * 60 * 60 * 1000);
+  const executions: ScheduleExecution[] = [];
+  const truncatedScheduleIds: string[] = [];
+
+  for (const schedule of schedules) {
+    try {
+      const interval = CronExpressionParser.parse(schedule.cronExpression, {
+        // next() is strictly after currentDate; start 1 ms early so a run exactly at startDate counts
+        currentDate: new Date(startDate.getTime() - 1),
+        endDate,
+        hashSeed: schedule.id,
+      });
+
+      const durationMs = (schedule.durationMinutes || 0) * 60 * 1000;
+      let count = 0;
+
+      for (let timestamp = nextRun(interval); timestamp && timestamp < endDate; timestamp = nextRun(interval)) {
+        if (count === limit) {
+          truncatedScheduleIds.push(schedule.id);
+          break;
+        }
+
+        executions.push({
+          scheduleId: schedule.id,
+          timestamp,
+          endTimestamp: new Date(timestamp.getTime() + durationMs),
+          label: schedule.label,
+          color: schedule.color,
+        });
+        count++;
+      }
+    } catch (error) {
+      console.error(`Failed to parse cron expression for ${schedule.label}:`, error);
+    }
+  }
+
+  executions.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  return { executions, truncatedScheduleIds };
 }
 
 export function generateExecutions(
@@ -17,50 +90,23 @@ export function generateExecutions(
   startDate: Date,
   hours: number
 ): ScheduleExecution[] {
-  const endDate = new Date(startDate.getTime() + hours * 60 * 60 * 1000);
-  const executions: ScheduleExecution[] = [];
-
-  for (const schedule of schedules) {
-    try {
-      const interval = parseExpression(schedule.cronExpression, {
-        currentDate: startDate,
-        endDate,
-        iterator: true,
-      });
-
-      const durationMs = (schedule.durationMinutes || 0) * 60 * 1000;
-
-      while (true) {
-        try {
-          const next = interval.next();
-          const timestamp = next.value.toDate();
-
-          if (timestamp > endDate) break;
-
-          executions.push({
-            scheduleId: schedule.id,
-            timestamp,
-            endTimestamp: new Date(timestamp.getTime() + durationMs),
-            label: schedule.label,
-            color: schedule.color,
-          });
-        } catch {
-          break;
-        }
-      }
-    } catch (error) {
-      console.error(`Failed to parse cron expression for ${schedule.label}:`, error);
-    }
-  }
-
-  return executions.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  return generateExecutionsWithLimit(schedules, startDate, hours).executions;
 }
 
 interface SweepEvent {
   time: number;
   type: 'start' | 'end';
+  instant: boolean; // Zero-duration (point-in-time) execution
   scheduleId: string;
   executionIndex: number;
+}
+
+// Order of events at the same timestamp: runs ending there finish first (so back-to-back
+// runs don't overlap), then everything starting there, then the end of point-in-time runs
+// (so simultaneous point-in-time runs still overlap each other)
+function eventRank(event: SweepEvent): number {
+  if (event.type === 'start') return 1;
+  return event.instant ? 2 : 0;
 }
 
 export function detectOverlaps(executions: ScheduleExecution[]): OverlapExecution[] {
@@ -72,21 +118,16 @@ export function detectOverlaps(executions: ScheduleExecution[]): OverlapExecutio
     const exec = executions[i];
     const startTime = exec.timestamp.getTime();
     const endTime = exec.endTimestamp.getTime();
+    const instant = endTime === startTime;
 
-    events.push({ time: startTime, type: 'start', scheduleId: exec.scheduleId, executionIndex: i });
-
-    // For point-in-time events (duration 0), we still add an end event at the same time
-    // but process starts before ends at the same timestamp
-    events.push({ time: endTime, type: 'end', scheduleId: exec.scheduleId, executionIndex: i });
+    events.push({ time: startTime, type: 'start', instant, scheduleId: exec.scheduleId, executionIndex: i });
+    events.push({ time: endTime, type: 'end', instant, scheduleId: exec.scheduleId, executionIndex: i });
   }
 
-  // Sort: by time, then starts before ends at same time
+  // Sort: by time, then by rank at the same time
   events.sort((a, b) => {
     if (a.time !== b.time) return a.time - b.time;
-    // starts before ends
-    if (a.type === 'start' && b.type === 'end') return -1;
-    if (a.type === 'end' && b.type === 'start') return 1;
-    return 0;
+    return eventRank(a) - eventRank(b);
   });
 
   const overlaps: OverlapExecution[] = [];
@@ -94,15 +135,15 @@ export function detectOverlaps(executions: ScheduleExecution[]): OverlapExecutio
   let overlapStart: number | null = null;
   let overlapIds: Set<string> = new Set();
 
-  // Process events in batches grouped by (time, type) to handle simultaneous events
+  // Process events in batches grouped by (time, rank) to handle simultaneous events
   let i = 0;
   while (i < events.length) {
     const prevDistinctCount = new Set(active.values()).size;
 
-    // Apply all events at the same (time, type)
+    // Apply all events at the same (time, rank)
     const batchTime = events[i].time;
-    const batchType = events[i].type;
-    while (i < events.length && events[i].time === batchTime && events[i].type === batchType) {
+    const batchRank = eventRank(events[i]);
+    while (i < events.length && events[i].time === batchTime && eventRank(events[i]) === batchRank) {
       if (events[i].type === 'start') {
         active.set(events[i].executionIndex, events[i].scheduleId);
       } else {

@@ -26,4 +26,10 @@ export function getDatabase(): Database.Database {
   return db;
 }
 
+// True when an insert collided with an existing primary key or UNIQUE column
+export function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || code === 'SQLITE_CONSTRAINT_UNIQUE';
+}
+
 export default getDatabase;

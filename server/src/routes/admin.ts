@@ -87,7 +87,7 @@ router.put('/users/:id', (req: AuthRequest, res: Response, next) => {
       return;
     }
 
-    fields.push('updated_at = datetime("now")');
+    fields.push("updated_at = datetime('now')");
     values.push(id);
 
     const stmt = db.prepare(`
@@ -193,7 +193,7 @@ router.delete('/projects/:id', (req: AuthRequest, res: Response, next) => {
       return;
     }
 
-    // Delete project (CASCADE will delete schedules and shares)
+    // Delete project (shares cascade; its schedules are kept but unassigned via SET NULL)
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
 
     res.status(204).send();

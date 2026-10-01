@@ -1,9 +1,12 @@
 // src/types/index.ts
 
+export type ProjectRole = 'owner' | 'view' | 'edit';
+
 export interface Project {
   id: string;
   name: string;
   color: string;
+  role?: ProjectRole; // Set for projects loaded from the server
 }
 
 export interface Schedule {
@@ -13,6 +16,7 @@ export interface Schedule {
   color: string;
   durationMinutes: number;
   projectId?: string;
+  ownerId?: string; // Set for schedules loaded from the server
 }
 
 export interface ScheduleExecution {
@@ -69,7 +73,7 @@ export interface ProjectShare {
 }
 
 export interface ServerProject extends Project {
-  role: 'owner' | 'view' | 'edit';
+  role: ProjectRole;
 }
 
 export interface ServerSchedule {

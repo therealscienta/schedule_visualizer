@@ -3,7 +3,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { getDatabase } from '../db/connection';
+import { getDatabase, isUniqueViolation } from '../db/connection';
+import { findUserByIdentifier } from '../db/users';
 import { JWT_SECRET } from '../config';
 import { authMiddleware } from '../middleware/auth';
 import { AuthRequest } from '../types';
@@ -12,7 +13,8 @@ const router = Router();
 
 // Validation schemas
 const registerSchema = z.object({
-  username: z.string().min(3).max(30),
+  // No "@" so a username can never be mistaken for (or shadow) an email address
+  username: z.string().min(3).max(30).regex(/^[^@]+$/, 'Username cannot contain "@"'),
   email: z.string().email(),
   password: z.string().min(6),
 });
@@ -71,9 +73,9 @@ router.post('/register', async (req, res, next) => {
           is_active: 1,
         },
       });
-    } catch (err: any) {
+    } catch (err) {
       // Handle unique constraint violations
-      if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.message.includes('UNIQUE')) {
+      if (isUniqueViolation(err)) {
         res.status(409).json({ error: 'Username or email already exists' });
         return;
       }
@@ -96,13 +98,8 @@ router.post('/login', async (req, res, next) => {
 
     const { identifier, password } = validation.data;
 
-    // Find user by username or email
-    const db = getDatabase();
-    const user = db.prepare(`
-      SELECT id, username, email, password_hash, role, is_active
-      FROM users
-      WHERE username = ? OR email = ?
-    `).get(identifier, identifier) as any;
+    // Find user by email or username
+    const user = findUserByIdentifier<any>(identifier, 'id, username, email, password_hash, role, is_active');
 
     if (!user) {
       res.status(401).json({ error: 'Invalid credentials' });
