@@ -11,6 +11,8 @@ import schedulesRoutes from './routes/schedules';
 import projectsRoutes from './routes/projects';
 import sharingRoutes from './routes/sharing';
 import adminRoutes from './routes/admin';
+import tokensRoutes from './routes/tokens';
+import v1Routes from './routes/v1';
 
 // Builds the Express app without listening, so tests can mount it on any port
 export function createApp(): express.Express {
@@ -29,6 +31,8 @@ export function createApp(): express.Express {
   app.use('/api/projects', projectsRoutes);
   app.use('/api/projects', sharingRoutes); // Sharing routes are mounted under /api/projects
   app.use('/api/admin', adminRoutes);
+  app.use('/api/tokens', tokensRoutes);
+  app.use('/api/v1', v1Routes); // Authenticated with API tokens, unlike the routes above
 
   // Health check endpoint
   app.get('/api/health', (req, res) => {

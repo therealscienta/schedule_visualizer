@@ -20,6 +20,7 @@ This application allows users to:
 - Register and log in with JWT-based authentication
 - Share projects with other users (view or edit permissions)
 - Admin panel for user and project management
+- Create API tokens and use the token-only API (`/api/v1`) from scripts: manage projects and schedules, keep a project's schedules in sync with a file, and ask when schedules run and overlap
 - Full mobile responsiveness
 
 The application includes three default example schedules on first load to demonstrate functionality. When authenticated, all data is persisted to the server (SQLite). When not authenticated, data is stored in localStorage.
@@ -42,7 +43,9 @@ The application includes three default example schedules on first load to demons
 - **bcrypt 5.1** - Password hashing (12 rounds)
 - **zod 3.22** - Request validation
 - **uuid 9.0** - ID generation
+- **cron-parser 5.10** - Also used by the server (API runs/overlaps), through the frontend's `src/utils/cronParser.ts`
 - **tsx** - TypeScript execution for development
+- **esbuild** - Bundles the server into one file, which lets it include that frontend module
 
 ## How to Run
 
@@ -66,7 +69,7 @@ npm run dev:all
 
 ```bash
 npm run build          # Build frontend (outputs to dist/)
-cd server && npm run build  # Build backend (outputs to server/dist/)
+cd server && npm run build  # Type-check, then bundle the backend to server/dist/index.js (npm packages stay external)
 node server/dist/index.js   # Serves both API and SPA from port 3001
 ```
 
@@ -150,6 +153,7 @@ schedule-visualiser/
 │   ├── pages/
 │   │   ├── LoginPage.tsx              # Login form
 │   │   ├── RegisterPage.tsx           # Registration form
+│   │   ├── ApiTokensPage.tsx          # Create, list and revoke API tokens (/account/tokens)
 │   │   └── admin/
 │   │       ├── AdminLayout.tsx        # Admin panel layout with navigation
 │   │       ├── AdminDashboard.tsx     # Admin stats overview
@@ -168,26 +172,42 @@ schedule-visualiser/
 │   ├── package.json             # Backend dependencies
 │   ├── tsconfig.json            # Backend TypeScript config
 │   ├── test/
-│   │   └── api.test.ts          # API tests (run by the root `npm test`)
+│   │   ├── helpers.ts           # Test server and request helpers shared by the API tests
+│   │   ├── api.test.ts          # Web app API tests (run by the root `npm test`)
+│   │   ├── tokens.test.ts       # API token tests
+│   │   └── v1.test.ts           # Token API (/api/v1) tests, incl. the OpenAPI document check
 │   └── src/
 │       ├── index.ts             # Starts the server
 │       ├── app.ts               # createApp(): Express app setup, route mounting, static serving
 │       ├── config.ts            # Environment variable configuration
-│       ├── types.ts             # AuthUser and AuthRequest types
+│       ├── types.ts             # AuthUser, ApiTokenInfo and AuthRequest types
+│       ├── errors.ts            # HttpError and parse() (zod validation that answers 400)
+│       ├── schemas.ts           # Request schemas shared by the web app routes and /api/v1
+│       ├── openapi.ts           # OpenAPI document served at /api/v1/openapi.json
 │       ├── db/
 │       │   ├── connection.ts    # SQLite connection (singleton, WAL mode)
-│       │   ├── schema.ts       # Table creation (users, projects, schedules, project_shares)
+│       │   ├── schema.ts        # Table creation and upgrades (users, projects, schedules, project_shares, api_tokens)
+│       │   ├── time.ts          # SQLite timestamps <-> ISO 8601
 │       │   └── users.ts         # Username/email lookup (emails take precedence)
 │       ├── middleware/
 │       │   ├── auth.ts          # JWT verification + per-request account check
+│       │   ├── apiToken.ts      # API token verification for /api/v1 (read-only tokens: GET only)
 │       │   ├── admin.ts         # Admin role check middleware
 │       │   └── errorHandler.ts  # Global error handler
+│       ├── services/            # Rules shared by the web app routes and /api/v1
+│       │   ├── access.ts        # A user's role in a project
+│       │   ├── projects.ts      # Project list/create/update/delete
+│       │   ├── schedules.ts     # Schedule list/create/update/delete, cron validation
+│       │   ├── sync.ts          # Declarative sync of a project's schedules by key
+│       │   └── apiTokens.ts     # Create, list, revoke and authenticate API tokens
 │       └── routes/
 │           ├── auth.ts          # POST /register, POST /login, GET /me
 │           ├── schedules.ts     # CRUD + /sync for bulk import
 │           ├── projects.ts      # CRUD for projects
 │           ├── sharing.ts       # POST /:id/share, DELETE /:id/share/:userId, GET /:id/shared-users
-│           └── admin.ts         # GET/PUT/DELETE /users, GET/DELETE /projects, GET /stats
+│           ├── admin.ts         # GET/PUT/DELETE /users, GET/DELETE /projects, GET /stats
+│           ├── tokens.ts        # List, create and revoke API tokens (login session only)
+│           └── v1/              # Token API: projects, schedules, sync, runs, overlaps (one router, see index.ts)
 └── data/                        # SQLite database directory (created at runtime)
 ```
 
@@ -236,6 +256,35 @@ All API routes are prefixed with `/api`.
 | DELETE | `/projects/:id` | Admin | Delete any project |
 | GET | `/stats` | Admin | System statistics |
 
+### API tokens (`/api/tokens`)
+Login session (JWT) only; an API token is rejected here.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/` | Yes | List the user's tokens (never the tokens themselves) |
+| POST | `/` | Yes | Create a token (`name`, `scope` read/write, optional `projectId`, `expiresInDays`); the response is the only time the token is shown |
+| DELETE | `/:id` | Yes | Revoke a token |
+
+### Token API (`/api/v1`)
+API token only (`Authorization: Bearer svt_...`); login tokens are rejected. Described in full by `GET /api/v1/openapi.json`.
+
+| Method | Path | Token | Description |
+|--------|------|-------|-------------|
+| GET | `/openapi.json` | None | The OpenAPI document |
+| GET | `/me` | Read | The user and token making the request |
+| GET | `/projects`, `/projects/:id` | Read | Projects the user can access, with their `role` |
+| POST | `/projects` | Write | Create a project (not for project-limited tokens) |
+| PATCH | `/projects/:id` | Write | Update a project (owner or edit access) |
+| DELETE | `/projects/:id` | Write | Delete a project (owner only; not for project-limited tokens) |
+| PUT | `/projects/:id/schedules` | Write | Sync: make the token user's keyed schedules in the project match a list (`?dryRun=true`) |
+| GET | `/schedules`, `/schedules/:id` | Read | Schedules the user can see (`?projectId=`) |
+| POST | `/schedules` | Write | Create a schedule (colour optional; invalid cron is a 400) |
+| PATCH | `/schedules/:id` | Write | Update a schedule (same rules as the web app) |
+| DELETE | `/schedules/:id` | Write | Delete a schedule (owner only) |
+| GET | `/runs` | Read | Runs in a range (`from`, `to`, `tz`, `projectId`, `scheduleId`, `limit`) |
+| GET | `/overlaps` | Read | Overlaps in a range (at most 31 days) |
+| POST | `/overlaps/check` | Read | Would proposed schedules overlap with the stored ones? Saves nothing |
+
 ### Health
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -243,14 +292,15 @@ All API routes are prefixed with `/api`.
 
 ## Database Schema
 
-SQLite database with four tables:
+SQLite database with five tables:
 
 - **users**: id, username (unique), email (unique), password_hash, role (user/admin), is_active, timestamps
 - **projects**: id, owner_id (FK users), name, color, timestamps
-- **schedules**: id, owner_id (FK users), project_id (FK projects, nullable, SET NULL on delete), label, cron_expression, color, duration_minutes, timestamps
+- **schedules**: id, owner_id (FK users), project_id (FK projects, nullable, SET NULL on delete), label, cron_expression, color, duration_minutes, sync_key (nullable; set by the API sync, unique per project and owner), timestamps
 - **project_shares**: id, project_id (FK projects, CASCADE), shared_with_user_id (FK users, CASCADE), permission (view/edit), created_at. Unique constraint on (project_id, shared_with_user_id)
+- **api_tokens**: id, user_id (FK users, CASCADE), project_id (FK projects, CASCADE, nullable), name, token_hash (unique SHA-256), token_prefix, scope (read/write), expires_at, last_used_at, created_at
 
-Foreign keys are enforced. Projects cascade-delete their shares. Users cascade-delete all their data.
+Foreign keys are enforced. Projects cascade-delete their shares and project-limited tokens. Users cascade-delete all their data, tokens included. A trigger clears `schedules.sync_key` whenever a schedule's `project_id` changes (including when its project is deleted). `initializeDatabase()` runs on every start and adds the tables and columns newer versions need, so there is no separate migration step.
 
 ## Key Architecture Decisions
 
@@ -260,6 +310,16 @@ Foreign keys are enforced. Projects cascade-delete their shares. Users cascade-d
 - Tokens expire after 7 days, but every request re-reads the account: disabling, deleting or demoting a user takes effect immediately, and the frontend signs out on any 401
 - Login and sharing accept username or email; an email match wins over a username match, and usernames can't contain `@`
 - Server errors (5xx) return a generic message; details are only logged
+
+### API Tokens
+- A token is `svt_` + 32 random bytes (base64url), shown once at creation; only its SHA-256 hash and first 12 characters are stored. It is read-only or read-write, can expire, and can be limited to one project
+- `/api/v1` accepts API tokens only and every other `/api` route accepts login JWTs only, so a leaked token can't create tokens, share projects, reach the admin routes or call `POST /api/schedules/sync`
+- Every request re-checks the token (not expired or revoked) and its account (active); `last_used_at` is refreshed at most once a minute
+- Everything but `GET` (and `POST /overlaps/check`) needs a read-write token; this is enforced in `middleware/apiToken.ts` for all routes, and a test walks the router to check it
+- A token acts as its user. The web app's routes and `/api/v1` share `services/` for projects and schedules, so permissions, cron validation and error codes can't differ
+- `PUT /api/v1/projects/:id/schedules` is declarative: it only creates, updates and deletes the token user's schedules in that project that have a `sync_key`, so schedules made in the web app and other members' schedules are never touched
+- `server/src/openapi.ts` is written by hand; a test checks that it lists exactly the routes of the v1 router
+- The server bundles `src/utils/cronParser.ts` (esbuild) so run times and overlaps are calculated by the same code as in the browser
 
 ### Data Sync Strategy
 - Unauthenticated: all data in localStorage with default example schedules
@@ -281,6 +341,7 @@ Foreign keys are enforced. Projects cascade-delete their shares. Users cascade-d
 - `/` - Main app (schedule input, timeline, statistics)
 - `/login` - Login page
 - `/register` - Registration page
+- `/account/tokens` - Create and revoke API tokens (requires login)
 - `/admin` - Admin panel (requires admin role)
 - `/admin/users` - User management
 - `/admin/projects` - Project management
@@ -307,6 +368,7 @@ Foreign keys are enforced. Projects cascade-delete their shares. Users cascade-d
 - Server-side persistence (SQLite)
 - Project sharing (view/edit permissions)
 - Admin panel (user management, project oversight, system stats)
+- API tokens and a token-only API (`/api/v1`) with project sync, runs/overlaps calculation and an OpenAPI description
 - Automatic data refresh on tab focus
 - Manual refresh button for server data
 - Mobile-responsive design

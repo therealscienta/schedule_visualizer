@@ -103,6 +103,34 @@ describe('App (sessions and server data)', () => {
   });
 
   describe('signed in', () => {
+    it('marks schedules that scripts manage through the API, and links to the token page', async () => {
+      localStorage.setItem('authToken', 'token');
+      mockApi((method, path) => {
+        if (path === '/auth/me') return { status: 200, body: me };
+        if (path === '/projects') return { status: 200, body: [] };
+        if (path === '/schedules') {
+          return {
+            status: 200,
+            body: [
+              { ...serverSchedule('s-api', 'Synced job', 'u1', null), syncKey: 'nightly' },
+              { ...serverSchedule('s-app', 'Manual job', 'u1', null), syncKey: null },
+            ],
+          };
+        }
+      });
+      const user = userEvent.setup();
+      renderApp();
+      await waitFor(() => expect(screen.getAllByText('Synced job').length).toBeGreaterThan(0));
+
+      const syncedRow = screen.getAllByText('Synced job').find((el) => el.tagName === 'P')!.closest('.rounded-lg') as HTMLElement;
+      expect(within(syncedRow).getByText('API')).toHaveAttribute('title', expect.stringContaining('nightly'));
+      const manualRow = screen.getAllByText('Manual job').find((el) => el.tagName === 'P')!.closest('.rounded-lg') as HTMLElement;
+      expect(within(manualRow).queryByText('API')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /alice/ }));
+      expect(screen.getByRole('link', { name: 'API tokens' })).toHaveAttribute('href', '/account/tokens');
+    });
+
     it('clears the account data on sign out', async () => {
       localStorage.setItem('authToken', 'token');
       mockApi((method, path) => {

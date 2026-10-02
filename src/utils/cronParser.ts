@@ -23,6 +23,18 @@ export function validateCronExpression(expression: string): boolean {
   }
 }
 
+// Whether cron-parser understands the time zone (an IANA name such as "Europe/Stockholm" or a
+// fixed offset). With an unknown one every run would silently be missing, so check it up front.
+export function isValidTimeZone(timeZone: string): boolean {
+  if (!timeZone) return false;
+  try {
+    CronExpressionParser.parse('* * * * *', { tz: timeZone }).next();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // The next run, or null once the iteration passes its endDate
 function nextRun(interval: CronExpression): Date | null {
   try {
@@ -38,12 +50,14 @@ export interface GeneratedExecutions {
   truncatedScheduleIds: string[];
 }
 
-// Executions in the half-open range [startDate, startDate + hours)
+// Executions in the half-open range [startDate, startDate + hours). Expressions are read in
+// the given time zone (see isValidTimeZone), or the runtime's own when there is none.
 export function generateExecutionsWithLimit(
   schedules: Schedule[],
   startDate: Date,
   hours: number,
-  limit: number = MAX_EXECUTIONS_PER_SCHEDULE
+  limit: number = MAX_EXECUTIONS_PER_SCHEDULE,
+  timeZone?: string
 ): GeneratedExecutions {
   const endDate = new Date(startDate.getTime() + hours * 60 * 60 * 1000);
   const executions: ScheduleExecution[] = [];
@@ -56,6 +70,7 @@ export function generateExecutionsWithLimit(
         currentDate: new Date(startDate.getTime() - 1),
         endDate,
         hashSeed: schedule.id,
+        ...(timeZone ? { tz: timeZone } : {}),
       });
 
       const durationMs = (schedule.durationMinutes || 0) * 60 * 1000;

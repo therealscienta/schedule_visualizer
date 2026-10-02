@@ -7,6 +7,8 @@ import { AuthProvider } from './contexts/AuthContext.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { RegisterPage } from './pages/RegisterPage.tsx'
 import { RequireAdmin } from './components/RequireAdmin.tsx'
+import { RequireAuth } from './components/RequireAuth.tsx'
+import { ApiTokensPage } from './pages/ApiTokensPage.tsx'
 import { AdminLayout } from './pages/admin/AdminLayout.tsx'
 import { AdminDashboard } from './pages/admin/AdminDashboard.tsx'
 import { AdminUsers } from './pages/admin/AdminUsers.tsx'
@@ -22,6 +24,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/" element={<App />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+            <Route
+              path="/account/tokens"
+              element={
+                <RequireAuth>
+                  <ApiTokensPage />
+                </RequireAuth>
+              }
+            />
             <Route
               path="/admin"
               element={

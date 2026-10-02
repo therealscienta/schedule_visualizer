@@ -1,69 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import type { Server } from 'http';
-import type { AddressInfo } from 'net';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
-import { createApp } from '../src/app';
 import { getDatabase } from '../src/db/connection';
 import { errorHandler } from '../src/middleware/errorHandler';
+import { api, createProject, createSchedule, register, Session, setupTestServer } from './helpers';
 
 // Runs against an in-memory SQLite database (DB_PATH=':memory:' in vitest.config.ts)
 
-interface Session {
-  token: string;
-  user: { id: string; username: string; email: string; role: string };
-}
-
-let server: Server;
-let base: string;
-
-beforeAll(async () => {
-  server = createApp().listen(0);
-  await new Promise((resolve) => server.once('listening', resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
-});
-
-afterAll(async () => {
-  await new Promise((resolve) => server.close(resolve));
-});
-
-async function api(method: string, path: string, token?: string, body?: unknown) {
-  const response = await fetch(`${base}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  return { status: response.status, body: text ? JSON.parse(text) : null };
-}
-
-async function register(username: string, password = 'secret123'): Promise<Session> {
-  const { status, body } = await api('POST', '/auth/register', undefined, {
-    username,
-    email: `${username}@example.com`,
-    password,
-  });
-  expect(status).toBe(201);
-  return body;
-}
-
-async function createProject(session: Session, name = 'Project') {
-  const { body } = await api('POST', '/projects', session.token, { name, color: '#123456' });
-  return body as { id: string };
-}
-
-async function createSchedule(session: Session, label: string, projectId?: string | null) {
-  const { status, body } = await api('POST', '/schedules', session.token, {
-    label,
-    cronExpression: '0 * * * *',
-    color: '#000000',
-    projectId,
-  });
-  expect(status).toBe(201);
-  return body as { id: string; projectId: string | null };
-}
+setupTestServer();
 
 const labelsFor = async (session: Session) =>
   ((await api('GET', '/schedules', session.token)).body as { label: string }[]).map((s) => s.label).sort();
