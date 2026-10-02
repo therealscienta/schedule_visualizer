@@ -126,6 +126,14 @@ export function ScheduleList({
             {schedule.durationMinutes > 0 && (
               <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">({schedule.durationMinutes}min)</span>
             )}
+            {schedule.syncKey && (
+              <span
+                className="ml-2 px-1.5 py-0.5 text-[10px] font-sans font-semibold rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                title={`Managed through the API (key "${schedule.syncKey}"); the next sync can overwrite changes made here`}
+              >
+                API
+              </span>
+            )}
           </p>
         </div>
       </div>

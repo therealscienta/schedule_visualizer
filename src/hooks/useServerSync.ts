@@ -22,6 +22,7 @@ function serverScheduleToLocal(s: ServerSchedule): Schedule {
     durationMinutes: s.durationMinutes,
     projectId: s.projectId || undefined,
     ownerId: s.ownerId,
+    syncKey: s.syncKey || undefined,
   };
 }
 

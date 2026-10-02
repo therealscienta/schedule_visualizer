@@ -4,6 +4,7 @@ import {
   generateExecutions,
   generateExecutionsWithLimit,
   detectOverlaps,
+  isValidTimeZone,
   MAX_EXECUTIONS_PER_SCHEDULE,
 } from './cronParser';
 import type { Schedule, ScheduleExecution } from '../types';
@@ -217,6 +218,27 @@ describe('cronParser', () => {
       expect(every15.length).toBe(96); // 4 per hour * 24 hours
       expect(hourly.length).toBe(24);
       expect(twiceDaily.length).toBe(2);
+    });
+  });
+
+  describe('time zones', () => {
+    const daily: Schedule = { id: 'd', label: 'Daily at nine', cronExpression: '0 9 * * *', color: '#000', durationMinutes: 0 };
+    const firstRun = (start: string, timeZone?: string) =>
+      generateExecutionsWithLimit([daily], new Date(start), 24, 100, timeZone).executions[0].timestamp.toISOString();
+
+    it('should read expressions in the given time zone', () => {
+      expect(firstRun('2026-01-15T00:00:00Z', 'UTC')).toBe('2026-01-15T09:00:00.000Z');
+      expect(firstRun('2026-01-15T00:00:00Z', 'Europe/Stockholm')).toBe('2026-01-15T08:00:00.000Z'); // UTC+1
+      expect(firstRun('2026-07-15T00:00:00Z', 'Europe/Stockholm')).toBe('2026-07-15T07:00:00.000Z'); // UTC+2
+      expect(firstRun('2026-01-15T00:00:00Z', 'America/New_York')).toBe('2026-01-15T14:00:00.000Z'); // UTC-5
+    });
+
+    it('should recognise valid time zones', () => {
+      expect(isValidTimeZone('UTC')).toBe(true);
+      expect(isValidTimeZone('Europe/Stockholm')).toBe(true);
+      expect(isValidTimeZone('+02:00')).toBe(true);
+      expect(isValidTimeZone('Mars/Phobos')).toBe(false);
+      expect(isValidTimeZone('')).toBe(false);
     });
   });
 

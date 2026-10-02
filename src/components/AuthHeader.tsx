@@ -57,6 +57,13 @@ export function AuthHeader() {
             <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{user.username}</p>
             <p className="text-xs text-gray-500 dark:text-gray-400">{user.email}</p>
           </div>
+          <Link
+            to="/account/tokens"
+            onClick={() => setShowDropdown(false)}
+            className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+          >
+            API tokens
+          </Link>
           {isAdmin && (
             <Link
               to="/admin"

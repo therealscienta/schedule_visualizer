@@ -17,6 +17,7 @@ export interface Schedule {
   durationMinutes: number;
   projectId?: string;
   ownerId?: string; // Set for schedules loaded from the server
+  syncKey?: string; // Set for schedules a script manages through the API
 }
 
 export interface ScheduleExecution {
@@ -84,6 +85,21 @@ export interface ServerSchedule {
   cronExpression: string;
   color: string;
   durationMinutes: number;
+  syncKey: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// An API token as listed; the token itself is only shown when it is created
+export interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string; // The first characters of the token, to tell tokens apart
+  scope: 'read' | 'write';
+  projectId: string | null; // Set when the token is limited to one project
+  projectName: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  expired: boolean;
 }

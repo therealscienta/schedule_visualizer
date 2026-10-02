@@ -45,6 +45,21 @@ describe('ScheduleList', () => {
     });
   });
 
+  describe('Schedules managed through the API', () => {
+    it('marks schedules that have a sync key', () => {
+      const synced: Schedule[] = [
+        { ...mockSchedules[0], syncKey: 'nightly-backup' },
+        mockSchedules[1],
+      ];
+      render(<ScheduleList schedules={synced} onRemove={mockOnRemove} onRename={mockOnRename} />);
+
+      const badges = screen.getAllByText('API');
+      expect(badges).toHaveLength(1);
+      expect(badges[0]).toHaveAttribute('title', expect.stringContaining('nightly-backup'));
+      expect(badges[0]).toHaveAttribute('title', expect.stringContaining('overwrite'));
+    });
+  });
+
   describe('With Schedules', () => {
     it('should render all schedules', () => {
       render(<ScheduleList schedules={mockSchedules} onRemove={mockOnRemove} onRename={mockOnRename} />);

@@ -4,6 +4,19 @@ All notable changes to the Cron Schedule Visualiser project.
 
 ## [Unreleased]
 
+### Added
+- API tokens and a token-only API for scripts and CI jobs at `/api/v1`, described by an OpenAPI document at `/api/v1/openapi.json`. Create tokens under **API tokens** in the user menu (`/account/tokens`): read-only or read-write, optionally expiring and optionally limited to one project. A token acts as its user, with the same permissions as in the web app.
+  - Read and manage projects and schedules (`/projects`, `/schedules`).
+  - `PUT /api/v1/projects/:id/schedules` keeps a project's schedules in sync with a list from a script (create, update and delete by key; repeatable; `?dryRun=true` to preview). Schedules made in the web app are never touched, and synced ones are marked **API** in the schedule list.
+  - `GET /api/v1/runs` and `/overlaps` calculate when schedules run and overlap (in any time zone), and `POST /api/v1/overlaps/check` checks whether new schedules would overlap with existing ones without saving anything.
+- The server rejects invalid cron expressions (HTTP 400) when schedules are created or their expression is changed.
+- Timestamps in API responses are ISO 8601 (UTC).
+
+### Changed
+- The server is now bundled with esbuild (`npm run build` in `server/`), and its output is still `server/dist/index.js`. It shares the cron code (`src/utils/cronParser.ts`) with the frontend.
+- Project and schedule rules moved into `server/src/services/`, shared by the web app's routes and the token API.
+- The app is now version 0.2.0. Existing databases are upgraded automatically at startup (a new `api_tokens` table and `schedules.sync_key` column); no action is needed.
+
 ### Security
 - `JWT_SECRET` is now required in production: the server refuses to start without it or with a placeholder value, and `docker-compose.yml` no longer defaults it. **Set `JWT_SECRET` (e.g. in `.env`) before deploying this version.**
 - Every API request re-checks the account, so disabling, deleting or demoting a user takes effect immediately instead of when the 7-day token expires.
